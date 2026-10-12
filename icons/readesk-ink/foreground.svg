@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <g transform="translate(512 512) scale(1.30) translate(-512 -512)"
+     fill="#FFFFFF" stroke="#FFFFFF" stroke-width="48" stroke-linejoin="round" stroke-linecap="round">
+    <!-- 对开书：两页向书脊下沉；中缝 80；书口外凸 -->
+    <path d="M252 360 Q204 480 252 600 L472 652 L472 412 Z"/>
+    <path d="M772 360 Q820 480 772 600 L552 652 L552 412 Z"/>
+  </g>
+</svg>

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#FDFAF3"/>
+      <stop offset="1" stop-color="#EDE3D2"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#1B2A4A"/>
+      <stop offset="1" stop-color="#0E1729"/>
+    </linearGradient>
+    <linearGradient id="ribbon" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F0683C"/>
+      <stop offset="1" stop-color="#D6471F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 纸面 -->
+  <rect width="1024" height="1024" rx="228" fill="url(#paper)"/>
+
+  <!-- 书影 -->
+  <ellipse cx="512" cy="782" rx="296" ry="30" fill="#14213D" opacity="0.10"/>
+
+  <!-- 打开的书：两页对称，向书脊下沉；中间留出 96 的书沟 -->
+  <path d="M196 296 L464 372 L464 716 L196 640 Z" fill="url(#ink)"/>
+  <path d="M828 296 L560 372 L560 716 L828 640 Z" fill="url(#ink)"/>
+
+  <!-- 页叠（书页厚度） -->
+  <path d="M196 640 L464 716 L464 744 L196 668 Z" fill="#14213D" opacity="0.42"/>
+  <path d="M828 640 L560 716 L560 744 L828 668 Z" fill="#14213D" opacity="0.42"/>
+
+  <!-- 书签带：从书沟里垂下，微微收窄，尾端开 V -->
+  <path d="M480 366 L544 366 L540 626 L512 594 L484 626 Z" fill="url(#ribbon)"/>
+</svg>

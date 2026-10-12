@@ -1,0 +1,36 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Readesk 电子书阅读器"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Readesk 电子书阅读器"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Readesk"
+    },
+    {
+      "name": "internet_reason",
+      "value": "用于访问在线书库（OPDS）、查询书籍信息、订阅 RSS 及在线语音合成"
+    },
+    {
+      "name": "file_access_reason",
+      "value": "记住你授权过的书籍目录，下次打开仍能读取"
+    },
+    {
+      "name": "documents_reason",
+      "value": "用于选择并读取本地电子书文件"
+    },
+    {
+      "name": "download_reason",
+      "value": "用于选择并读取“下载”目录里的电子书文件"
+    },
+    {
+      "name": "pasteboard_reason",
+      "value": "用于复制书摘、笔记和分享链接"
+    }
+  ]
+}

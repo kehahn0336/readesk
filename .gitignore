@@ -1,0 +1,55 @@
+# 构建产物与巨型生成物不入库
+entry/src/main/resources/rawfile/webapp/
+notes/frontend-build.log
+notes/frontend-build.exit
+notes/tsc-check.log
+entry/build/
+entry/.preview/
+.hvigor/
+oh_modules/
+notes/hap-build.log
+notes/install.log
+notes/hdc-*.log
+
+# hvigor 产物（根级）
+build/
+notes/evidence/device-settings*.json
+
+# 生成的验收素材（由 scripts/make-test-data.py 产出）
+.testdata/
+
+# CI 临时文件
+notes/.ci-bc.log
+notes/evidence/doctor-report-ci.json
+
+# ── 签名与本机材料（绝不入仓库）────────────────────────────────────────────
+# 真正的 build-profile.json5 含签名口令密文与本机绝对路径；仓库内只跟踪
+# 脱敏模板 build-profile.template.json5（见该文件里的填写说明）。
+#
+# ⚠️ 必须带前导斜杠：只忽略**仓库根**的那一份。写成裸 `build-profile.json5`
+#    会连 `entry/build-profile.json5`（模块级构建配置，含 release 的混淆规则
+#    引用，构建必需）一起忽略掉 —— 那会让全新 clone 直接构建不了。
+/build-profile.json5
+signature/
+*.p12
+*.p7b
+*.cer
+*.csr
+*.jks
+*.keystore
+
+# ── IDE / 构建工具缓存（含本机绝对路径）──────────────────────────────────
+.bitfun/
+.idea/
+.cxx/
+.clangd
+local.properties
+*.iml
+
+# ── 杂项 ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# 本机私有设置（目标设备、工具链路径…），示例见 .env.local.example
+.env.local
+

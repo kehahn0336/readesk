@@ -1,0 +1,31 @@
+# Readesk · 混淆规则文件（模块级）
+#
+# 为什么之前没有这个文件却也能构建：entry/build-profile.json5 里这条规则挂在
+# **release** 的 buildOptionSet 下，debug 构建根本不会读它 —— 直到 2026-10-12
+# 第一次真正走 release（出上架 .app）才暴露：
+#   ERROR: 00304036 Not Found
+#   The obfuscation rule file './obfuscation-rules.txt' cannot be found
+# 所以补上这个文件（DevEco 新建工程时本来就会生成它）。
+#
+# 当前状态：entry/build-profile.json5 中 `obfuscation.ruleOptions.enable = false`，
+# 即**不做混淆**，因此本文件只需存在，内容不生效。
+#
+# ⚠️ 若将来把 enable 改成 true，请先确认一件事：WebView ↔ ArkTS 桥是**按字符串
+#    命令名**分发的（见 entry/src/main/ets/bridge/ReadestBridge.ets 与注入到
+#    webapp 的 readest-bridge.js），并且 shim 依赖 window.__READEST_HARMONY__ /
+#    window.__READEST_DEVICE_FORM__ 这两个全局名。开启混淆前务必真机回归
+#    "导入书籍 / 备份 / TTS / 剪贴板" 这几条最容易被改名打断的链路。
+#
+# 选项说明（开启混淆后按需在下方填写）：
+#   -disable-obfuscation          关闭所有混淆
+#   -enable-property-obfuscation  混淆属性名
+#   -enable-toplevel-obfuscation  混淆全局作用域内的名称
+#   -enable-filename-obfuscation  混淆文件名
+#   -enable-export-obfuscation    混淆导出名
+#   -compact                      去除多余空格与换行
+#   -remove-log                   移除所有 console.* 语句
+#   -print-namecache <file>       输出名称映射缓存
+#   -apply-namecache <file>       复用名称映射缓存
+#   -keep-property-name           保留指定属性名（选项下一行起逐个列名）
+#   -keep-global-name             保留全局作用域内的指定名称
+#   -keep-file-name               保留指定文件名

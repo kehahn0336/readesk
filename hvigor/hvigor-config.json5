@@ -1,0 +1,13 @@
+{
+  "modelVersion": "6.0.2",
+  "properties": {
+    "ohos.pack.compressLevel": "standard"
+  },
+  "dependencies": {},
+  "execution": {},
+  "logging": {},
+  "debugging": {},
+  "nodeOptions": {
+    "maxOldSpaceSize": 8192
+  }
+}

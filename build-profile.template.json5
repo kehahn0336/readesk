@@ -1,0 +1,109 @@
+// ============================================================================
+// build-profile.json5 的**脱敏模板**
+// ============================================================================
+// 说明：真正的 `build-profile.json5` **不入库**（已加入 .gitignore）。
+//   原因：它含签名口令（DevEco 密文）与本机绝对路径，属"本机材料"，
+//   换机器也无法直接复用（密文绑定 `~/.ohos/config/material/`）。
+//
+// 用法：把本文件复制成 `build-profile.json5`，替换下面所有 `<...>` 占位符。
+//
+//   cp build-profile.template.json5 build-profile.json5
+//
+// 签名材料从哪来，两条路任选：
+//
+//   A) 日常开发（可侧载真机）—— 用 DevEco 自动签名：
+//      打开工程 → File → Project Structure → Signing Configs →
+//      勾选 "Automatically generate signature"（需登录华为开发者账号）。
+//      DevEco 会生成 `.p12/.csr/.cer/.p7b` 到 `~/.ohos/config/`，
+//      并把 signingConfigs 直接写好（连同口令密文）。此时本模板只作参考。
+//
+//   B) 出上架包（app_gallery，只能上传应用市场、无法侧载）：
+//      1. 生成密钥与 CSR（DevEco: Build → Generate Key and CSR）→ 得到 `.p12` + `.csr`；
+//      2. AGC → 证书管理 → 用该 CSR 申请**发布证书** → 下载 `.cer`；
+//      3. AGC → Profile 管理 → 新建发布 Profile（类型 release、分发类型应用市场、
+//         勾选应用实际申请的 ACL 权限）→ 下载 `.p7b`；
+//      4. 把三者的绝对路径与口令填进下面的 `release` 段。
+//
+//      注意：发布 Profile 里必须包含应用申请的**受限权限(ACL)**，否则装不上。
+//      本工程在 module.json5 申请了三条 ACL，Profile 需逐条包含：
+//        ohos.permission.READ_WRITE_DOCUMENTS_DIRECTORY
+//        ohos.permission.FILE_ACCESS_PERSIST
+//        ohos.permission.READ_WRITE_DOWNLOAD_DIRECTORY
+//
+// 切换 debug / release 签名：`node scripts/set-signing.mjs debug|release`
+//   （签名挂在 product 上而非 buildMode，改 buildMode 不会换签名。）
+// ============================================================================
+
+{
+  "app": {
+    "products": [
+      {
+        "name": "default",
+        "targetSdkVersion": "6.0.2(22)",
+        "compatibleSdkVersion": "6.0.2(22)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        },
+        // 出上架包时改成 "release"（或直接用 scripts/set-signing.mjs 切换）
+        "signingConfig": "default"
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ],
+    "signingConfigs": [
+      {
+        // 调试签名：可侧载真机
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "<调试证书 .cer 绝对路径>",
+          "keyAlias": "<密钥别名，DevEco 自动签名通常为 debugKey>",
+          "keyPassword": "<密钥口令>",
+          "profile": "<调试 Profile .p7b 绝对路径>",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "<密钥库 .p12 绝对路径>",
+          "storePassword": "<密钥库口令>"
+        }
+      },
+      {
+        // 发布签名：type=release、app-distribution-type=app_gallery
+        // 该 Profile 打出的包**无法侧载**（装机报 9568322 not trusted app source）
+        "name": "release",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "<发布证书 .cer 绝对路径>",
+          "keyAlias": "<发布密钥别名，例如 releasekey>",
+          "keyPassword": "<发布密钥口令>",
+          "profile": "<发布 Profile .p7b 绝对路径>",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "<发布密钥库 .p12 绝对路径>",
+          "storePassword": "<发布密钥库口令>"
+        }
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Readest Bridge Doctor</title>
+  <!-- 用真实的桥 shim：这里跑的调用路径与 webapp 完全一致（__TAURI_INTERNALS__.invoke） -->
+  <script src="readest-bridge.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; padding: 16px 20px; font: 14px/1.6 -apple-system, "HarmonyOS Sans", sans-serif;
+           background: #14161a; color: #e6e8eb; }
+    h1 { font-size: 17px; margin: 0 0 4px; }
+    #summary { font-size: 15px; font-weight: 600; margin: 10px 0; }
+    .ok { color: #3ddc84; }
+    .bad { color: #ff6b6b; }
+    .row { padding: 6px 0; border-bottom: 1px solid #262a31; }
+    .name { font-weight: 600; }
+    .detail { color: #9aa3ad; font-size: 12.5px; word-break: break-all; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Readest 桥自检（fs / path / window / http）</h1>
+  <div id="summary">running…</div>
+  <div id="list"></div>
+  <script>
+    (function () {
+      var invoke = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
+      var results = [];
+      var list = document.getElementById('list');
+      var summary = document.getElementById('summary');
+
+      function toText(u8) {
+        if (typeof u8 === 'string') return u8;
+        return new TextDecoder().decode(u8);
+      }
+
+      function sameBytes(a, b) {
+        if (!a || !b || a.length !== b.length) return false;
+        for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
+      }
+
+      function check(name, ok, detail) {
+        results.push({ name: name, ok: !!ok, detail: String(detail === undefined ? '' : detail) });
+        console.log('DOCTOR|' + (ok ? 'PASS' : 'FAIL') + '|' + name + '|' + detail);
+      }
+
+      function render() {
+        var pass = 0;
+        for (var i = 0; i < results.length; i++) if (results[i].ok) pass++;
+        var allOk = pass === results.length && results.length > 0;
+        summary.className = allOk ? 'ok' : 'bad';
+        summary.textContent = (allOk ? 'PASS ' : 'FAIL ') + pass + '/' + results.length + ' 项通过';
+        var html = '';
+        for (var j = 0; j < results.length; j++) {
+          var r = results[j];
+          html += '<div class="row"><span class="' + (r.ok ? 'ok' : 'bad') + '">' +
+            (r.ok ? '✓' : '✗') + '</span> <span class="name">' + r.name +
+            '</span><div class="detail">' + r.detail + '</div></div>';
+        }
+        list.innerHTML = html;
+      }
+
+      function fail(name, error) {
+        check(name, false, 'threw: ' + (error && error.message ? error.message : String(error)));
+      }
+
+      async function run() {
+        results = [];
+        if (!invoke) {
+          check('bridge available', false, 'window.__TAURI_INTERNALS__.invoke missing');
+          render();
+          return;
+        }
+        check('bridge available', !!window.__READEST_BRIDGE__, '__READEST_BRIDGE__=' + !!window.__READEST_BRIDGE__);
+
+        // 摘要算法：EPUB 的 IDPF/Adobe **字体反混淆要 SHA-1**（foliate-js epub.js），
+        // Edge TTS 要 SHA-256。ArkWeb 没有 crypto.subtle，靠 shim 的纯 JS 补丁提供 ——
+        // 之前只实现了 SHA-256，于是带混淆字体的书会以
+        // "Failed to open the book file: unsupported digest algorithm: SHA-1" 失败
+        // （2026-09-29 真机实测）。用标准向量锁死，不依赖网络。
+        try {
+          var enc = new TextEncoder();
+          var digestHex = async function (algo, text) {
+            var buf = await window.crypto.subtle.digest(algo, enc.encode(text));
+            var u8 = new Uint8Array(buf);
+            var hex = '';
+            for (var i = 0; i < u8.length; i++) hex += (u8[i] < 16 ? '0' : '') + u8[i].toString(16);
+            return hex;
+          };
+          var sha1Hex = await digestHex('SHA-1', 'abc');
+          check('crypto.subtle SHA-1（EPUB 字体反混淆用）',
+            sha1Hex === 'a9993e364706816aba3e25717850c26c9cd0d89d',
+            'SHA-1("abc")=' + sha1Hex.slice(0, 24) + ' len=' + sha1Hex.length);
+          var sha256Hex = await digestHex('SHA-256', 'abc');
+          check('crypto.subtle SHA-256（Edge TTS 用）',
+            sha256Hex === 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+            'SHA-256("abc")=' + sha256Hex.slice(0, 24));
+        } catch (e) { fail('crypto.subtle SHA-1（EPUB 字体反混淆用）', e); }
+
+        var dataRoot = '';
+        try {
+          dataRoot = await invoke('plugin:path|resolve_directory', { directory: 15, path: '' });
+          check('path.resolve_directory(AppLocalData)', typeof dataRoot === 'string' && dataRoot.length > 0,
+            dataRoot);
+        } catch (e) { fail('path.resolve_directory(AppLocalData)', e); }
+
+        try {
+          var joined = await invoke('plugin:path|join', { paths: ['a', 'b', '..', 'c'] });
+          check('path.join 折叠 ..', joined === 'a/c', String(joined));
+        } catch (e) { fail('path.join 折叠 ..', e); }
+
+        try {
+          var base = await invoke('plugin:path|basename', { path: '/x/y/book.epub' });
+          var ext = await invoke('plugin:path|extname', { path: '/x/y/book.epub' });
+          check('path.basename/extname', base === 'book.epub' && ext === '.epub', base + ' / ' + ext);
+
+          // 窗口契约（2026-10-10 真机 bug 的防复现锁）
+          // 上游 tauriHandleToggleMaximize 的逻辑是：
+          //   if (await isFullscreen()) { setFullscreen(false); unmaximize(); }
+          //   else                      { toggleMaximize(); }
+          // 我们曾让 is_fullscreen 恒返回 true（"沉浸式窗口 = 全屏"的想当然），
+          // 于是每次点最大化都变成 unmaximize、toggle_maximize 一次都轮不到。
+          var isFull = await invoke('plugin:window|is_fullscreen', { label: 'main' });
+          // 契约：全新启动时必须为 false（恒 true → 最大化永远变成 unmaximize；
+          //        恒 false → 退出全屏永远进不去）。两个方向都真机撞过。
+          check('window.is_fullscreen 如实返回（新启动应为 false）', isFull === false, String(isFull));
+          var isMax = await invoke('plugin:window|is_maximized', { label: 'main' });
+          check('window.is_maximized 返回布尔', isMax === true || isMax === false, String(isMax));
+          // ⚠️ 下面这组**会真的把窗口最大化再还原**（仅自检用）。
+          // 判据是"状态"与"稳定性"，不是"变大"—— 2in1 上应用启动时窗口本来就是最大化的。
+          var max0 = await invoke('plugin:window|is_maximized', { label: 'main' });
+          // 先确保处于普通窗口状态，才有"最大化前"可言
+          if (max0 === true) {
+            await invoke('plugin:window|unmaximize', { label: 'main' });
+            await new Promise(function (r) { setTimeout(r, 1200); });
+          }
+          var sizeA = await invoke('plugin:window|inner_size', { label: 'main' });
+          var posA = await invoke('plugin:window|outer_position', { label: 'main' });
+          await invoke('plugin:window|maximize', { label: 'main' });
+          await new Promise(function (r) { setTimeout(r, 1500); });
+          var maxB = await invoke('plugin:window|is_maximized', { label: 'main' });
+          var sizeB = await invoke('plugin:window|inner_size', { label: 'main' });
+          await invoke('plugin:window|unmaximize', { label: 'main' });
+          await new Promise(function (r) { setTimeout(r, 1500); });
+          var maxC = await invoke('plugin:window|is_maximized', { label: 'main' });
+          var sizeC = await invoke('plugin:window|inner_size', { label: 'main' });
+          var posC = await invoke('plugin:window|outer_position', { label: 'main' });
+          // 再走一遍，验证"普通窗口几何"是稳定的（这才是用户期待的"回到原样"）
+          await invoke('plugin:window|maximize', { label: 'main' });
+          await new Promise(function (r) { setTimeout(r, 1500); });
+          await invoke('plugin:window|unmaximize', { label: 'main' });
+          await new Promise(function (r) { setTimeout(r, 1500); });
+          var sizeD = await invoke('plugin:window|inner_size', { label: 'main' });
+          var posD = await invoke('plugin:window|outer_position', { label: 'main' });
+          var near = function (a, b) { return Math.abs(a - b) <= 24; };
+          check('窗口①：maximize 后状态为已最大化', maxB === true, 'is_maximized=' + maxB);
+          check('窗口②：unmaximize 后状态为非最大化', maxC === false, 'is_maximized=' + maxC);
+          check('窗口③：最大化确实铺满（不小于普通态）',
+            sizeB.width >= sizeA.width && sizeB.height >= sizeA.height - 4,
+            sizeA.width + 'x' + sizeA.height + ' → ' + sizeB.width + 'x' + sizeB.height);
+          check('窗口④：普通态几何可复现（第二次往返回到同一尺寸/位置）',
+            near(sizeD.width, sizeC.width) && near(sizeD.height, sizeC.height) &&
+            near(posD.x, posC.x) && near(posD.y, posC.y),
+            '第一次 ' + sizeC.width + 'x' + sizeC.height + '@' + posC.x + ',' + posC.y +
+            ' → 第二次 ' + sizeD.width + 'x' + sizeD.height + '@' + posD.x + ',' + posD.y);
+          check('窗口⑤：还原后与最大化前一致',
+            near(sizeC.width, sizeA.width) && near(sizeC.height, sizeA.height) &&
+            near(posC.x, posA.x) && near(posC.y, posA.y),
+            sizeA.width + 'x' + sizeA.height + '@' + posA.x + ',' + posA.y +
+            ' → ' + sizeC.width + 'x' + sizeC.height + '@' + posC.x + ',' + posC.y);
+          var mon = await invoke('plugin:window|primary_monitor', { label: 'main' });
+          check('window.primary_monitor 有 Physical 尺寸',
+            !!mon && !!mon.size && !!mon.size.Physical && mon.size.Physical.width > 0,
+            mon ? JSON.stringify(mon.size) : 'null');
+        } catch (e) { fail('path.basename/extname', e); }
+
+        var dir = dataRoot + '/readest-doctor';
+        try {
+          // 递归 mkdir 必须容忍已存在（上一版在已存在时会抛）。
+          await invoke('plugin:fs|remove', { path: dir, options: { recursive: true } });
+        } catch (e) { /* 首次不存在，正常 */ }
+        try {
+          await invoke('plugin:fs|mkdir', { path: dir, options: { recursive: true } });
+          await invoke('plugin:fs|mkdir', { path: dir, options: { recursive: true } });
+          check('fs.mkdir 递归 + 幂等', await invoke('plugin:fs|exists', { path: dir }) === true, dir);
+        } catch (e) { fail('fs.mkdir 递归 + 幂等', e); }
+
+        var text = 'héllo 世界 13chars';
+        var textPath = dir + '/text.txt';
+        try {
+          await invoke('plugin:fs|write_text_file', { path: textPath, data: text });
+          var back = toText(await invoke('plugin:fs|read_text_file', { path: textPath }));
+          check('fs 文本往返（无零填充）', back === text,
+            'len=' + back.length + ' 期望=' + text.length + ' 内容=' + JSON.stringify(back));
+        } catch (e) { fail('fs 文本往返（无零填充）', e); }
+
+        var bytes = new Uint8Array([0, 1, 2, 253, 254, 255, 10, 13, 65]);
+        var binPath = dir + '/bin.dat';
+        try {
+          await invoke('plugin:fs|write_file', { path: binPath, data: bytes });
+          var binBack = await invoke('plugin:fs|read_file', { path: binPath });
+          check('fs 字节往返（Uint8Array 信封）',
+            binBack instanceof Uint8Array && sameBytes(binBack, bytes),
+            'type=' + (binBack && binBack.constructor && binBack.constructor.name) + ' len=' + (binBack && binBack.length));
+        } catch (e) { fail('fs 字节往返（Uint8Array 信封）', e); }
+
+        // 0 字节往返：**备份回退路径的第一步**就是写 0 字节做截断。
+        // 2026-10-10「备份书库→保存失败」的真根因是系统 Base64Helper.decodeSync('')
+        // 抛 "Parameter error … length greater than 0"（错误原文见该 issue 的截图）。
+        try {
+          var emptyPath = dir + '/empty.bin';
+          await invoke('plugin:fs|write_file', { path: emptyPath, data: new Uint8Array(0) });
+          var emptyBack = await invoke('plugin:fs|read_file', { path: emptyPath });
+          var emptySize = await invoke('plugin:fs|size', { path: emptyPath });
+          check('fs 0 字节往返（备份截断依赖）',
+            (emptyBack instanceof Uint8Array) && emptyBack.length === 0 && Number(emptySize) === 0,
+            'type=' + (emptyBack && emptyBack.constructor && emptyBack.constructor.name) +
+            ' len=' + (emptyBack && emptyBack.length) + ' size=' + emptySize);
+        } catch (e) { fail('fs 0 字节往返（备份截断依赖）', e); }
+
+        // 句柄写往返：备份回退路径（zip.js → open/write/close）依赖这条原语。
+        // 2026-10-10 排查「备份书库 → 保存失败」时补上 —— 它能在不启动应用流程的前提下
+        // 判定这条原语通不通（若不通，备份/恢复写得再多也是空文件）。
+        try {
+          var hwDir = dir + '/handle-write';
+          await invoke('plugin:fs|mkdir', { path: hwDir, options: { recursive: true } });
+          var hwPath = hwDir + '/roundtrip.bin';
+          var payload = new Uint8Array([7, 8, 9, 250]);
+          var rid = await invoke('plugin:fs|open', {
+            path: hwPath,
+            options: { read: true, write: true, create: true, truncate: true },
+          });
+          var written = await invoke('plugin:fs|write', { rid: rid, data: payload });
+          await invoke('plugin:fs|close', { rid: rid });
+          var hwBack = await invoke('plugin:fs|read_file', { path: hwPath });
+          check('fs 句柄写往返（备份回退路径依赖）',
+            hwBack instanceof Uint8Array && sameBytes(hwBack, payload) && Number(written) === 4,
+            'written=' + written + ' len=' + (hwBack && hwBack.length));
+        } catch (e) { fail('fs 句柄写往返（备份回退路径依赖）', e); }
+
+        // plugin:resources|close —— Tauri 的 core 命令（Resource 基类的 close）。
+        // 2026-10-11 真机暴露：备份回退路径（zip.js 关流）会调它，未实现则整个备份失败。
+        // 契约：① 传真实 rid 不抛错；② 传无主 rid **也不抛错**（尽力释放的语义）；
+        //       ③ 关掉之后该 rid 不能再用（用 fstat 验证已释放）。
+        try {
+          var resPath = dir + '/resource-close.bin';
+          await invoke('plugin:fs|write_file', { path: resPath, data: new Uint8Array([1, 2, 3]) });
+          var resRid = await invoke('plugin:fs|open', { path: resPath, options: { read: true } });
+          await invoke('plugin:resources|close', { rid: resRid });
+          var releasedOk = false;
+          try { await invoke('plugin:fs|fstat', { rid: resRid }); } catch (e2) { releasedOk = true; }
+          var bogusNoThrow = true;
+          try { await invoke('plugin:resources|close', { rid: 999999 }); } catch (e3) { bogusNoThrow = false; }
+          check('plugin:resources|close（备份关流依赖）',
+            releasedOk === true && bogusNoThrow === true,
+            'rid 已释放=' + releasedOk + ' 无主 rid 不抛错=' + bogusNoThrow);
+        } catch (e) { fail('plugin:resources|close（备份关流依赖）', e); }
+
+        // 备份/恢复用的打包能力（zip.js 走这些浏览器 API）。
+        // 2026-10-10 排查「备份书库 → 保存失败」：本 WebView 之前就缺 crypto.subtle
+        // （见上面 SHA-1 那条），所以这些 API 必须逐条探测，缺哪条就关掉对应选项。
+        check('打包能力：TransformStream（回退路径直接 new）',
+          typeof TransformStream === 'function', typeof TransformStream);
+        check('打包能力：CompressionStream（zip.js 的 useCompressionStream 依赖）',
+          typeof CompressionStream === 'function', typeof CompressionStream);
+        check('打包能力：DecompressionStream（恢复时解压依赖）',
+          typeof DecompressionStream === 'function', typeof DecompressionStream);
+        check('打包能力：Worker（zip.js 的 useWebWorkers 依赖）',
+          typeof Worker === 'function', typeof Worker);
+
+        try {
+          var st = await invoke('plugin:fs|stat', { path: binPath });
+          var fresh = st && typeof st.mtime === 'number' && (Date.now() - st.mtime) < 86400000 && st.mtime > 0;
+          check('fs.stat size + mtime(毫秒)', st && st.size === bytes.length && st.isFile === true && fresh,
+            JSON.stringify({ size: st && st.size, mtime: st && st.mtime, isFile: st && st.isFile }));
+        } catch (e) { fail('fs.stat size + mtime(毫秒)', e); }
+
+        try {
+          var entries = await invoke('plugin:fs|read_dir', { path: dir });
+          var names = (entries || []).map(function (x) { return x.name; }).join(',');
+          var shaped = Array.isArray(entries) && entries.length >= 2 &&
+            typeof entries[0].isFile === 'boolean' && typeof entries[0].isDirectory === 'boolean';
+          check('fs.read_dir 条目形状', shaped, 'n=' + (entries || []).length + ' [' + names + ']');
+        } catch (e) { fail('fs.read_dir 条目形状', e); }
+
+        // 句柄随机访问：直接打底层命令，验证 `数据 ++ 8 字节大端 nread` 约定与 lseek。
+        var rid = -1;
+        try {
+          rid = await invoke('plugin:fs|open',
+            { path: dir + '/fh.dat', options: { read: true, write: true, create: true, truncate: true } });
+          check('fs.open 返回 rid', typeof rid === 'number' && rid >= 0, 'rid=' + rid);
+        } catch (e) { fail('fs.open 返回 rid', e); }
+
+        if (rid >= 0) {
+          try {
+            var written = await invoke('plugin:fs|write', { rid: rid, data: new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80]) });
+            check('fs.write 返回写入字节数', written === 8, 'written=' + written);
+          } catch (e) { fail('fs.write 返回写入字节数', e); }
+          try {
+            var pos = await invoke('plugin:fs|seek', { rid: rid, offset: 2, whence: 0 });
+            check('fs.seek 返回新位置', pos === 2, 'pos=' + pos);
+          } catch (e) { fail('fs.seek 返回新位置', e); }
+          try {
+            var raw = await invoke('plugin:fs|read', { rid: rid, len: 3 });
+            var trailer = 0;
+            var body = raw;
+            if (raw instanceof Uint8Array && raw.length >= 8) {
+              var view = new DataView(raw.buffer, raw.byteOffset + raw.length - 8, 8);
+              trailer = Number(view.getBigUint64(0));
+              body = raw.slice(0, raw.length - 8);
+            }
+            check('fs.read 的 nread 尾约定', trailer === 3 && body.length === 3 && body[0] === 30 && body[1] === 40 && body[2] === 50,
+              'nread=' + trailer + ' body=[' + Array.prototype.join.call(body, ',') + ']');
+          } catch (e) { fail('fs.read 的 nread 尾约定', e); }
+          try {
+            var fst = await invoke('plugin:fs|fstat', { rid: rid });
+            check('fs.fstat', fst && fst.size === 8 && fst.isFile === true, JSON.stringify({ size: fst && fst.size }));
+          } catch (e) { fail('fs.fstat', e); }
+          try {
+            await invoke('plugin:fs|close', { rid: rid });
+            check('fs.close 释放句柄', true, 'rid=' + rid);
+          } catch (e) { fail('fs.close 释放句柄', e); }
+        }
+
+        try {
+          var size = await invoke('plugin:fs|size', { path: binPath });
+          check('fs.size', size === bytes.length, 'size=' + size);
+        } catch (e) { fail('fs.size', e); }
+
+        // 窗口命令走同步路径（不在 shim 的 ASYNC_COMMANDS 里），必须立刻拿到值。
+        try {
+          var maximized = await invoke('plugin:window|is_maximized', { label: 'main' });
+          check('window.is_maximized 同步返回布尔', typeof maximized === 'boolean', String(maximized));
+        } catch (e) { fail('window.is_maximized 同步返回布尔', e); }
+        try {
+          var scale = await invoke('plugin:window|scale_factor', { label: 'main' });
+          check('window.scale_factor', typeof scale === 'number' && scale > 0, String(scale));
+        } catch (e) { fail('window.scale_factor', e); }
+        try {
+          var size2 = await invoke('plugin:window|inner_size', { label: 'main' });
+          check('window.inner_size', size2 && size2.width > 0 && size2.height > 0,
+            JSON.stringify(size2));
+        } catch (e) { fail('window.inner_size', e); }
+
+        try {
+          await invoke('plugin:fs|remove', { path: dir, options: { recursive: true } });
+          check('fs.remove 递归删除', await invoke('plugin:fs|exists', { path: dir }) === false, dir);
+        } catch (e) { fail('fs.remove 递归删除', e); }
+
+        // 未知命令必须"响亮地失败"，而不是静默 no-op（静默会让应用侧表现为"点了没反应"）。
+        // 靶子不能再用 plugin:turso|ping：M3 起 LegacyBridge 已接手 turso 域，它不会再抛，
+        // 拿它当"未实现"靶子会得到一条永远亮的假红。
+        var loud = false;
+        var probeCmd = 'plugin:__doctor_probe__|nope';
+        try {
+          await invoke(probeCmd, {});
+        } catch (e) { loud = String(e.message || e).indexOf('unsupported') >= 0; }
+        check('未实现命令显式报错', loud, probeCmd + ' → unsupported');
+
+        // ── 异步 http 真信封 + 订阅源格式矩阵（M3 增补）────────────────────
+        // 回归位：本次「从订阅源导入一直转圈」与随后的「Unrecognized feed format」
+        // 都死在这一段。读流严格照抄构建产物里的 @tauri-apps/plugin-http：
+        //   · 每块**末字节=1 表示 EOF**，且该块正文被客户端**丢弃**
+        //     （所以桥必须让正文块 flag 恒为 0、EOF 单独一块）
+        //   · 空块的末字节是 undefined → 客户端无限 pull（转圈的另一个来源）
+        // guard 上限保证即使回归，医生页也会 FAIL 而不是一起挂死。
+
+        /** 用真实客户端语义把整个响应体读成文本。 */
+        async function readResponseText(url) {
+          var rid = await invoke('plugin:http|fetch',
+            { clientConfig: { method: 'GET', url: url, headers: [] } });
+          var meta = await invoke('plugin:http|fetch_send', { rid: rid });
+          var chunks = [];
+          var total = 0;
+          var eof = false;
+          var empty = 0;
+          var reads = 0;
+          while (!eof && reads++ < 400) {
+            var raw = await invoke('plugin:http|fetch_read_body', { rid: meta.rid });
+            var u8 = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+            if (u8.byteLength === 0) { empty++; break; }
+            var lastByte = u8[u8.byteLength - 1];
+            var actual = u8.slice(0, u8.byteLength - 1);
+            // 与客户端逐字一致：flag=1 时只 close，**同块正文丢弃**。
+            // 这里若"顺手把正文收下"就会放过"正文与 EOF 同块"这类真 bug（假绿）。
+            if (lastByte === 1) {
+              eof = true;
+            } else if (actual.byteLength > 0) {
+              chunks.push(actual);
+              total += actual.byteLength;
+            }
+          }
+          await invoke('plugin:http|fetch_cancel_body', { rid: meta.rid });
+          var all = new Uint8Array(total);
+          var at = 0;
+          for (var i = 0; i < chunks.length; i++) { all.set(chunks[i], at); at += chunks[i].byteLength; }
+          return { status: meta.status, eof: eof, total: total, reads: reads, empty: empty, text: toText(all) };
+        }
+
+        var FEED_LINK_SELECTOR =
+          'link[rel="alternate"][type="application/rss+xml"],' +
+          'link[rel="alternate"][type="application/atom+xml"],' +
+          'link[rel="alternate"][type="application/feed+json"],' +
+          'link[rel="alternate"][type="application/json"]';
+
+        /**
+         * 按应用 feedParser 的规则判定格式与条目数（与 src/services/rss/feedParser.ts
+         * 的入口分支逐条对齐），失败时的回退顺序也与 fetchAndParseFeed 一致：
+         * 只有"看起来像 HTML"才做自动发现。
+         */
+        function probeFeed(text) {
+          var t = String(text).replace(/^\ufeff/, '').trimStart();
+          if (t.charAt(0) === '{') {
+            try {
+              var j = JSON.parse(t);
+              return Array.isArray(j.items)
+                ? { kind: 'json', items: j.items.length }
+                : { kind: 'json-invalid', items: 0 };
+            } catch (e) { return { kind: 'json-broken', items: 0 }; }
+          }
+          var doc = new DOMParser().parseFromString(t, 'text/xml');
+          var broken = !!doc.querySelector('parsererror');
+          if (!broken) {
+            var feed = doc.querySelector('feed');
+            if (feed) return { kind: 'atom', items: feed.querySelectorAll('entry').length };
+            if (doc.querySelector('rss, rdf\\:RDF, channel')) {
+              var ch = doc.querySelector('channel');
+              // 注意：RSS 1.0/RDF 的 <item> 是 <channel> 的兄弟而非子节点，
+              // 这里只会数到 0 —— 与上游实现一致，属已知限制。
+              return ch ? { kind: 'rss', items: ch.querySelectorAll('item').length }
+                        : { kind: 'unknown', items: 0 };
+            }
+          }
+          var low = t.slice(0, 400).toLowerCase();
+          if (low.indexOf('<!doctype html') >= 0 || low.indexOf('<html') >= 0) {
+            var html = new DOMParser().parseFromString(t, 'text/html');
+            var links = html.querySelectorAll(FEED_LINK_SELECTOR);
+            if (links.length > 0) {
+              return { kind: 'html', items: 0, discovered: links[0].getAttribute('href') };
+            }
+          }
+          return { kind: broken ? 'xml-broken' : 'unknown', items: 0 };
+        }
+
+        // 支持的类型各取一例。这里验证「桥能完整取回 + 平台能解析出条目」，
+        // 端到端仍以在应用里粘贴该 URL 为准。
+        var FEED_MATRIX = [
+          { label: 'RSS 2.0', url: 'https://sspai.com/feed', kind: 'rss' },
+          { label: 'Atom', url: 'https://blog.codingnow.com/atom.xml', kind: 'atom' },
+          // 注：原用 daringfireball.net/feeds/json，2026-09-28 17:5x 起该域名在本环境
+          // 不可达（主机 curl 亦 http=000，域名解析落在 198.18.0.0/15 沙箱网段），
+          // 属环境问题而非桥缺陷 —— 换用规格站自己的 feed.json（3.4 KB / 2 条）。
+          { label: 'JSON Feed', url: 'https://www.jsonfeed.org/feed.json', kind: 'json' },
+          { label: '网页自动发现', url: 'https://blog.codingnow.com/', kind: 'html' },
+        ];
+        for (var mi = 0; mi < FEED_MATRIX.length; mi++) {
+          var entry = FEED_MATRIX[mi];
+          try {
+            var got = await readResponseText(entry.url);
+            var probe = probeFeed(got.text);
+            var detail = 'status=' + got.status + ' bytes=' + got.total + ' reads=' + got.reads +
+              ' empty=' + got.empty + ' kind=' + probe.kind + ' items=' + probe.items;
+            if (mi === 0) {
+              check('http 读流以 EOF 收尾且正文非空',
+                got.status === 200 && got.eof && got.total > 0 && got.empty === 0,
+                'eof=' + got.eof + ' ' + detail + ' head=' + JSON.stringify(got.text.slice(0, 40)));
+              check('订阅源 XML 可被 DOMParser(text/xml) 解析',
+                probe.kind === 'rss' && probe.items > 0,
+                'chars=' + got.text.length + ' kind=' + probe.kind + ' items=' + probe.items);
+            }
+            if (probe.kind === 'html') {
+              // 页面里发现了 feed，再取一次 —— 这是应用的真实行为
+              var nextUrl = probe.discovered
+                ? new URL(probe.discovered, entry.url).toString() : '';
+              var got2 = nextUrl ? await readResponseText(nextUrl) : { text: '', total: 0 };
+              var probe2 = got2.text ? probeFeed(got2.text) : { kind: 'none', items: 0 };
+              check('订阅源格式 · ' + entry.label,
+                probe.kind === entry.kind && probe2.items > 0,
+                detail + ' discover=' + nextUrl + ' → kind=' + probe2.kind + ' items=' + probe2.items);
+            } else {
+              check('订阅源格式 · ' + entry.label,
+                probe.kind === entry.kind && probe.items > 0, detail);
+            }
+          } catch (e) { fail('订阅源格式 · ' + entry.label, e); }
+        }
+
+        // ── 下载 / 导入链路预检（M3 回归）──────────────────────────────
+        // 内置浏览器「下载书自动导入」在旧工程 09-25 已真机验收；这里只把
+        // **桥侧可自动化的那几环**提前验掉，免得人工点完才发现是桥的问题：
+        //   解包(@ohos.zlib) / 剪藏抓取 / 下载事件管道 / 剪贴板
+        // 真正端到端（拦截下载 → emit → ingestFile → 入库）仍需在 UI 里点一遍。
+        var ZIP_B64 = 'UEsDBBQAAAAIAGhgPF24ZKHbIAAAAB4AAAAUAAAAbmVzdGVkL2Jvb2stb25lLmVwdWJzDQh10nXxdw7xD9INcIz08Xd00TUwNDI2MTUzt7AEAFBLAwQUAAAACABoYDxd3LIc8iIAAAAgAAAACQAAAG5vdGVzLnR4dMvLL1FIVEjKz8/WUcgtLS5RSEpVSMvMKUktSk1RyC8tAQBQSwECFAMUAAAACABoYDxduGSh2yAAAAAeAAAAFAAAAAAAAAAAAAAAgAEAAAAAbmVzdGVkL2Jvb2stb25lLmVwdWJQSwECFAMUAAAACABoYDxd3LIc8iIAAAAgAAAACQAAAAAAAAAAAAAAgAFSAAAAbm90ZXMudHh0UEsFBgAAAAACAAIAeQAAAJsAAAAAAA==';
+
+        function b64ToU8(b64) {
+          var bin = atob(b64);
+          var u8 = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+          return u8;
+        }
+
+        var dlDir = dataRoot + '/readest-doctor-dl';
+        var zipPath = dlDir + '/books.zip';
+        try {
+          await invoke('plugin:fs|mkdir', { path: dlDir, options: { recursive: true } });
+
+          // ① zip → 按扩展名过滤出书（.txt 必须被过滤掉，且要走到嵌套目录里）
+          await invoke('plugin:fs|write_file', { path: zipPath, data: b64ToU8(ZIP_B64) });
+          var found = await invoke('extract_web_browser_archive', { path: zipPath, exts: ['epub'] });
+          var picked = Array.isArray(found) && found.length === 1 && /\.epub$/i.test(found[0]);
+          var bodyOk = false;
+          if (picked) {
+            var readBack = await invoke('plugin:fs|read_file', { path: found[0] });
+            bodyOk = toText(readBack) === 'EPUB-DOCTOR-PAYLOAD-0123456789';
+          }
+          check('下载解包：zip 里按扩展名挑出书（含嵌套目录，过滤 .txt）',
+            picked && bodyOk,
+            'found=' + JSON.stringify(found) + ' 内容一致=' + bodyOk);
+
+          // ② 非压缩包改名 .zip → 必须返回 []（JS 据此回退成"直接导入原文件"）
+          var fakePath = dlDir + '/fake.zip';
+          await invoke('plugin:fs|write_file', { path: fakePath, data: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]) });
+          var none = await invoke('extract_web_browser_archive', { path: fakePath, exts: ['epub'] });
+          check('下载解包：非压缩包改名 .zip → 返回空数组（JS 回退直接导入）',
+            Array.isArray(none) && none.length === 0, 'got=' + JSON.stringify(none));
+        } catch (e) { fail('下载解包：zip 里按扩展名挑出书（含嵌套目录，过滤 .txt）', e); }
+
+        // ③ 剪藏抓取：原生 GET，返回 {url,status,contentType,body(base64)}
+        try {
+          var res = await invoke('fetch_web_browser_resource',
+            { url: 'https://sspai.com/feed', headers: {} });
+          var text = res && res.body ? toText(b64ToU8(res.body)) : '';
+          check('剪藏抓取：fetch_web_browser_resource 状态/类型/正文',
+            !!res && res.status === 200 && /xml/i.test(String(res.contentType)) && text.indexOf('<?xml') === 0,
+            'status=' + (res && res.status) + ' contentType=' + (res && res.contentType) +
+            ' chars=' + text.length + ' head=' + JSON.stringify(text.slice(0, 28)));
+        } catch (e) { fail('剪藏抓取：fetch_web_browser_resource 状态/类型/正文', e); }
+
+        // ④ 下载事件管道：与 webapp 完全相同的注册方式（Channel handler），
+        //    再走 native 用的同一个 __READEST_BRIDGE__.emit。旧工程曾在
+        //    "Channel 形状的 handler 被静默丢弃"上踩过坑，所以专门锁死。
+        try {
+          var seen = null;
+          var cbId = window.__READEST_BRIDGE__.transformCallback(function (ev) { seen = ev; }, true);
+          await invoke('plugin:event|listen', {
+            event: 'web-browser-download',
+            target: { kind: 'Window', label: 'main' },
+            handler: cbId,
+          });
+          window.__READEST_BRIDGE__.emit('web-browser-download', {
+            url: 'https://example.org/books.zip', path: zipPath, filename: 'books.zip',
+            success: true, error: '',
+          });
+          var shaped = !!seen && seen.event === 'web-browser-download' &&
+            !!seen.payload && seen.payload.filename === 'books.zip' && seen.payload.success === true;
+          check('下载事件：监听注册 + emit 投递（Tauri Event 形状）', shaped,
+            'event=' + (seen && seen.event) + ' payload=' + JSON.stringify(seen && seen.payload));
+        } catch (e) { fail('下载事件：监听注册 + emit 投递（Tauri Event 形状）', e); }
+
+        // ── 导入搬运用的 fs 命令（M3 重写域里"产物在用但医生页没覆盖"的三条）──
+        // fs 域在 M3 被整体重写，而这几个是"把下载好的书搬进 Books/<hash>/"的
+        // 用语。参数形状取自构建产物里的 plugin-fs：
+        //   copy_file{fromPath,toPath,options} / rename{oldPath,newPath,options}
+        //   ftruncate{rid,len}
+        // 产物里出现但**从不调用**的 create / truncate / lstat 故意不测（测死代码
+        // 只会制造噪音，与本轮撤掉剪贴板用例同理）。
+        var mvDir = dataRoot + '/readest-doctor-move';
+        try {
+          await invoke('plugin:fs|remove', { path: mvDir, options: { recursive: true } });
+        } catch (e) { /* 首次不存在 */ }
+        try {
+          await invoke('plugin:fs|mkdir', { path: mvDir, options: { recursive: true } });
+          await invoke('plugin:fs|write_file', { path: mvDir + '/src.epub', data: new Uint8Array([9, 8, 7, 6, 5]) });
+
+          // ① copy_file：目标父目录尚不存在（导入时 Books/<hash>/ 正是新建的）
+          await invoke('plugin:fs|copy_file', {
+            fromPath: mvDir + '/src.epub', toPath: mvDir + '/hash-abc/Book.epub',
+          });
+          var copied = await invoke('plugin:fs|read_file', { path: mvDir + '/hash-abc/Book.epub' });
+          var copyOk = copied instanceof Uint8Array && copied.length === 5 &&
+            copied[0] === 9 && copied[4] === 5;
+          check('导入搬运：fs.copy_file 自动建父目录且字节一致', copyOk,
+            'len=' + (copied && copied.length) + ' 首尾=' + (copied && copied[0]) + ',' + (copied && copied[4]));
+
+          // ①′ 相对目标 + toPathBaseDir：真机上"浏览器下载入库"就是这条走错，
+          //    表现为 invoke FAIL plugin:fs|copy_file err=Permission denied
+          //    （旧实现只认 baseDir，把 toPathBaseDir 丢掉 → 拿相对路径直接 copy）。
+          await invoke('plugin:fs|copy_file', {
+            fromPath: mvDir + '/src.epub',
+            toPath: 'readest-doctor-rel/rel.epub',
+            options: { toPathBaseDir: 14 },
+          });
+          var relBack = await invoke('plugin:fs|read_file', { path: dataRoot + '/readest-doctor-rel/rel.epub' });
+          check('导入搬运：fs.copy_file 认 toPathBaseDir(14) 的相对目标',
+            relBack instanceof Uint8Array && relBack.length === 5 && relBack[0] === 9,
+            'len=' + (relBack && relBack.length));
+
+          // ①″ rename 同理（RenameOptions{oldPathBaseDir,newPathBaseDir}）
+          await invoke('plugin:fs|rename', {
+            oldPath: 'readest-doctor-rel/rel.epub',
+            newPath: 'readest-doctor-rel/rel2.epub',
+            options: { oldPathBaseDir: 14, newPathBaseDir: 14 },
+          });
+          var rel2 = await invoke('plugin:fs|read_file', { path: dataRoot + '/readest-doctor-rel/rel2.epub' });
+          check('导入搬运：fs.rename 认 oldPathBaseDir/newPathBaseDir 的相对路径',
+            rel2 instanceof Uint8Array && rel2.length === 5 && rel2[0] === 9,
+            'len=' + (rel2 && rel2.length));
+
+          // ①‴ 真实导入传进来的两种形态：`file://` URI 与百分号编码。
+          //     真机证据（2026-09-29）：folder/文件导入的 fromPath 是
+          //       `file://docs/…/%E6%B5%8B%E8%AF%95/a.epub`（中文目录被编码）
+          //     而 fs.copyFileSync 既不认 URI、也不认编码后的路径 → 直接失败，
+          //     文件夹导入因此报错（单文件只是靠前端回退掩盖了）。
+          //     注意素材必须在**应用自己的沙箱**里：用户「文档」里的文件要靠
+          //     选择器授权才读得到，自检页没有那个授权（会 EPERM），
+          //     那样测的就不是 URI 处理逻辑而是权限了。
+          var uriSrcDir = dataRoot + '/测试';
+          await invoke('plugin:fs|mkdir', { path: uriSrcDir, options: { recursive: true } });
+          var uriSrcPath = uriSrcDir + '/uri-src.dat';
+          await invoke('plugin:fs|write_file', { path: uriSrcPath, data: new Uint8Array([1, 2, 3, 4, 5, 6, 7]) });
+
+          // (a) URI 形态（含百分号编码的中文目录）
+          var encodedSrcUri = 'file://' + encodeURI(uriSrcPath);
+          await invoke('plugin:fs|copy_file', {
+            fromPath: encodedSrcUri, toPath: 'readest-doctor-uri-src/from-uri.dat',
+            options: { toPathBaseDir: 14 },
+          });
+          var uriCopy = await invoke('plugin:fs|read_file', { path: dataRoot + '/readest-doctor-uri-src/from-uri.dat' });
+          check('导入搬运：fs.copy_file 接受 file:// URI 源（中文目录 + 百分号编码）',
+            uriCopy instanceof Uint8Array && uriCopy.length === 7 && uriCopy[0] === 1,
+            'uri=' + encodedSrcUri.replace(/^file:\/\/[^/]*/, '') + ' len=' + (uriCopy && uriCopy.length));
+
+          // (b) 解码后的真实路径形态（同样带中文目录）
+          await invoke('plugin:fs|copy_file', {
+            fromPath: uriSrcPath, toPath: 'readest-doctor-uri-src/from-path.dat',
+            options: { toPathBaseDir: 14 },
+          });
+          var pathCopy = await invoke('plugin:fs|read_file', { path: dataRoot + '/readest-doctor-uri-src/from-path.dat' });
+          check('导入搬运：fs.copy_file 接受含中文目录的真实路径源',
+            pathCopy instanceof Uint8Array && pathCopy.length === 7 && pathCopy[0] === 1,
+            'len=' + (pathCopy && pathCopy.length));
+
+          // ③ rename：旧路径消失、新路径内容不变
+          await invoke('plugin:fs|rename', {
+            oldPath: mvDir + '/hash-abc/Book.epub', newPath: mvDir + '/hash-abc/book.epub',
+          });
+          var gone = await invoke('plugin:fs|exists', { path: mvDir + '/hash-abc/Book.epub' });
+          var moved = await invoke('plugin:fs|read_file', { path: mvDir + '/hash-abc/book.epub' });
+          check('导入搬运：fs.rename 旧路径消失、新路径字节不变',
+            gone === false && moved instanceof Uint8Array && moved.length === 5 && moved[0] === 9,
+            'oldExists=' + gone + ' newLen=' + (moved && moved.length));
+
+          // ③ ftruncate：在句柄上截断（写回 config/metadata 时会用到）
+          var fh = await invoke('plugin:fs|open', {
+            path: mvDir + '/trunc.dat',
+            options: { read: true, write: true, create: true, truncate: true },
+          });
+          await invoke('plugin:fs|write', { rid: fh, data: new Uint8Array([1, 2, 3, 4, 5, 6, 7]) });
+          await invoke('plugin:fs|ftruncate', { rid: fh, len: 3 });
+          var fst2 = await invoke('plugin:fs|fstat', { rid: fh });
+          await invoke('plugin:fs|close', { rid: fh });
+          check('导入搬运：fs.ftruncate 句柄截断生效', fst2 && fst2.size === 3, 'size=' + (fst2 && fst2.size));
+        } catch (e) { fail('导入搬运：fs.copy_file 自动建父目录且字节一致', e); }
+
+        // ── 「从文件夹导入」链路（2026-09-30 真机三连失败）─────────────────
+        // ① 原生命令 `read_dir`（不带 plugin: 前缀）= 上游 Rust WalkDir 的目录扫描，
+        //    是文件夹导入的快路径；没实现时应用退到 JS 递归回退（更慢且当时还踩了 ②③）。
+        // ② `plugin:path|join` 必须**保留 URI 形态**：应用用 startsWith('file://')
+        //    判断是不是 URI（utils/misc.isFileURI），被压成 `file:/…` 就不再走
+        //    "经选择器授权复制"那条路。
+        // ③ `plugin:fs|stat` 必须吃下 file URI 的多种写法（真机出现过三种）。
+        var scanDir = dataRoot + '/readest-doctor-扫描';
+        try {
+          await invoke('plugin:fs|remove', { path: scanDir, options: { recursive: true } });
+        } catch (e) { /* 首次不存在 */ }
+        try {
+          await invoke('plugin:fs|mkdir', { path: scanDir + '/中文子目录', options: { recursive: true } });
+          await invoke('plugin:fs|write_file', { path: scanDir + '/a.epub', data: new Uint8Array([1, 2, 3]) });
+          await invoke('plugin:fs|write_file', { path: scanDir + '/中文子目录/b.epub', data: new Uint8Array([4, 5]) });
+          await invoke('plugin:fs|write_file', { path: scanDir + '/skip.txt', data: new Uint8Array([9]) });
+
+          // read_dir 回传的 path 必须**以入参形态为前缀** —— 应用是这么算相对路径的：
+          //   getRelativePath(file.path, fp) = startsWith(fp) ? 去掉前缀 : 原样
+          // 传 URI（file://docs/…，中文还是百分号编码）时若回真实绝对路径，
+          // 前缀去不掉 → 相对路径退化成"绝对路径去掉开头斜杠" →
+          // 应用拼出 {URI}/{绝对路径} 这种垃圾（2026-09-30 真机复现，
+          // 表现为 copy_uri_to_path FAILED + "无法打开书籍文件"）。
+          var scanUri = 'file://' + scanDir;
+          var scanned = await invoke('read_dir', {
+            path: scanUri, recursive: true, extensions: ['epub'],
+          });
+          var rels = [];
+          var sizes = [];
+          var prefixOk = true;
+          for (var si = 0; si < (scanned || []).length; si++) {
+            var sp = scanned[si].path;
+            if (sp.indexOf(scanUri + '/') !== 0) { prefixOk = false; break; }
+            var rel = sp.slice(scanUri.length + 1);   // 应用去掉前缀后得到的相对路径
+            if (rel.charAt(0) === '/') { prefixOk = false; break; }
+            rels.push(rel);
+            sizes.push(scanned[si].size);
+          }
+          rels.sort();
+          sizes.sort();
+          var scanOk = Array.isArray(scanned) && scanned.length === 2 && prefixOk &&
+            rels[0] === 'a.epub' && rels[1] === '中文子目录/b.epub' &&
+            sizes[0] === 2 && sizes[1] === 3;
+          check('文件夹扫描：read_dir 递归 + 扩展名过滤 + 路径以入参为前缀', scanOk,
+            'n=' + ((scanned || []).length) + ' rels=' + JSON.stringify(rels) +
+            ' sizes=' + JSON.stringify(sizes));
+
+          var joinedUri = await invoke('plugin:path|join',
+            { paths: ['file://docs/storage/x', '子目录', 'b.epub'] });
+          check('文件夹扫描：path|join 保留 file:// 形态（应用据此识别 URI）',
+            joinedUri === 'file://docs/storage/x/子目录/b.epub', 'joined=' + JSON.stringify(joinedUri));
+
+          var uriForms = [
+            'file://' + scanDir + '/a.epub',
+            'file:///' + scanDir.slice(1) + '/a.epub',
+            'file:/' + scanDir.slice(1) + '/a.epub',
+            'file:///docs' + scanDir + '/a.epub',
+            // 百分号编码形态：只走"URI→真实路径"的解析，没有 URI 兜底 ——
+            // 解码漏了这里必红（2026-10-03 就是漏在 LegacyBridge 那份实现上）
+            'file://' + encodeURI(scanDir) + '/a.epub',
+          ];
+          var formResults = [];
+          for (var fi = 0; fi < uriForms.length; fi++) {
+            try {
+              var stForm = await invoke('plugin:fs|stat', { path: uriForms[fi] });
+              formResults.push(stForm && stForm.size === 3 ? 'ok' : 'size=' + (stForm && stForm.size));
+            } catch (e4) { formResults.push('err'); }
+          }
+          check('文件夹扫描：stat 接受 file URI 的多种写法（含百分号编码）', formResults.join(',') === 'ok,ok,ok,ok,ok',
+            'forms=' + uriForms.length + ' → ' + formResults.join(','));
+        } catch (e) { fail('文件夹扫描：read_dir 递归 + 扩展名过滤 + 绝对路径', e); }
+
+        // ── 本地文件导入的取件契约（M3 修复：此前 100% 失败）──────────────
+        // 选择器给的是 `file://docs/...` URI；nativeAppService.openFile 会调
+        // copy_uri_to_path 把它拷进沙箱，然后判 `res.success`。旧实现取错字段
+        // （真实字段在 `payload` 里，且目标字段叫 `dst`）且失败时返回 null，
+        // 于是 `null.success` 抛 TypeError —— 本地文件导入整个挂掉。
+        var uriDir = dataRoot + '/readest-doctor-uri';
+        try {
+          await invoke('plugin:fs|remove', { path: uriDir, options: { recursive: true } });
+        } catch (e) { /* 首次不存在 */ }
+        try {
+          await invoke('plugin:fs|mkdir', { path: uriDir, options: { recursive: true } });
+          var pickedPath = uriDir + '/picked.epub';
+          await invoke('plugin:fs|write_file', { path: pickedPath, data: new Uint8Array([7, 7, 7, 7, 7, 7]) });
+          var copiedPath = uriDir + '/copied-from-uri.epub';
+          var res2 = await invoke('plugin:native-bridge|copy_uri_to_path', {
+            payload: { uri: 'file://' + pickedPath, dst: copiedPath },
+          });
+          var shapeOk2 = !!res2 && res2.success === true;
+          var bytesOk2 = false;
+          if (shapeOk2) {
+            var back2 = await invoke('plugin:fs|read_file', { path: copiedPath });
+            bytesOk2 = back2 instanceof Uint8Array && back2.length === 6 && back2[0] === 7;
+          }
+          check('本地导入：copy_uri_to_path 返回 {success} 且字节拷到位', shapeOk2 && bytesOk2,
+            'res=' + JSON.stringify(res2) + ' copied=' + bytesOk2);
+        } catch (e) { fail('本地导入：copy_uri_to_path 返回 {success} 且字节拷到位', e); }
+
+        // 缺参数时必须是 {success:false}，**不能**返回 null（调用方会读 .success）
+        try {
+          var bad = await invoke('plugin:native-bridge|copy_uri_to_path', { payload: {} });
+          check('本地导入：copy_uri_to_path 缺参数返回 {success:false} 而非 null',
+            !!bad && bad.success === false, 'res=' + JSON.stringify(bad));
+        } catch (e) { fail('本地导入：copy_uri_to_path 缺参数返回 {success:false} 而非 null', e); }
+
+        // 用户空间「按真实路径读文件」：决定「从文件夹导入」的对话框能否显示可读路径
+        // （而不是 file:///docs/…/%E6%B5%8B%E8%AF%95/… 那种又长又像乱码的标识）。
+        // 列目录已经证明可行（read_dir 内部就是按真实路径 listFileSync 的），这里再验读文件。
+        // 「按**真实路径**读用户空间文件」这条能力（决定文件夹对话框显示可读路径）。
+        // 注意：**不要硬编码某个用户目录** —— 2026-10-11 平板就因此吃了假红灯
+        // （那台设备上并没有那个测试目录，用例必然失败，久而久之真红灯会被无视）。
+        // 所以改为按可用性挑样本，且样本一律**由系统目录推导**，不写死任何绝对路径：
+        //   ① 用户空间根目录（Documents 目录本身，覆盖"用户空间 + 真实路径"这条组合）；
+        //   ② 没有就退到当前书库的 library.json（迁移过的设备它本身就在用户空间）；
+        //   ③ 都没有（全新安装、尚无书库）→ 明确记为**跳过**，而不是失败。
+        var probeCandidates = [];
+        try {
+          var docsRoot = await invoke('plugin:path|resolve_directory', { directory: 14, path: '.' });
+          if (docsRoot) probeCandidates.push(String(docsRoot));
+        } catch (eDocs) { /* 取不到就走 ② */ }
+        try {
+          var booksRoot = await invoke('plugin:path|resolve_directory', { directory: 14, path: 'Readest/Books' });
+          probeCandidates.push(String(booksRoot) + '/library.json');
+        } catch (eBooks) { /* 取不到就只用已有样本 */ }
+        var chosen = '';
+        for (var pi = 0; pi < probeCandidates.length; pi++) {
+          try {
+            await invoke('plugin:fs|stat', { path: probeCandidates[pi] });
+            chosen = probeCandidates[pi];
+            break;
+          } catch (eStat) { /* 换下一个候选 */ }
+        }
+        if (chosen === '') {
+          check('用户空间按真实路径可读（决定文件夹对话框显示可读路径）', true,
+            '跳过：本机无用户空间样本（全新安装且库在默认位置时属正常）');
+        } else {
+          try {
+            var probeBytes = await invoke('plugin:fs|read_file', { path: chosen });
+            check('用户空间按真实路径可读（决定文件夹对话框显示可读路径）',
+              probeBytes instanceof Uint8Array && probeBytes.length > 0,
+              'len=' + (probeBytes && probeBytes.length) + ' sample=' + chosen.slice(-28));
+          } catch (e6) { fail('用户空间按真实路径可读（决定文件夹对话框显示可读路径）', e6); }
+        }
+
+        // PDF 导入的**桥侧前提**：parse_pdf_metadata / render_pdf_cover 必须
+        // **返回 null 而不是抛错**。因为应用的 tryNativeParsePdf 用
+        // `Promise.allSettled([两者])`，**两个都 rejected 就 throw**，
+        // 那个 throw 会被 bookService 包成"无法打开书籍文件" → PDF 导入整体失败。
+        // 只要有一条 fulfilled（哪怕值是 null），就会走 foliate-js 的元数据兜底。
+        // PDF 在"从文件夹导入"里是**默认勾选**格式之一，所以这条必须守住。
+        try {
+          var pdfMeta = await invoke('parse_pdf_metadata', { filePath: '/data/local/tmp/probe.pdf' });
+          var pdfCover = await invoke('render_pdf_cover',
+            { payload: { filePath: '/data/local/tmp/probe.pdf', maxLongEdge: 600 } });
+          check('PDF 导入前提：原生 PDF 快路径不抛错（返回 null 交 JS 兜底）',
+            (pdfMeta === null || pdfMeta === undefined) &&
+            (pdfCover === null || pdfCover === undefined),
+            'meta=' + JSON.stringify(pdfMeta) + ' cover=' + JSON.stringify(pdfCover));
+        } catch (e7) { fail('PDF 导入前提：原生 PDF 快路径不抛错（返回 null 交 JS 兜底）', e7); }
+
+        // 注：剪贴板不在此处断言。webapp 只用 `plugin:clipboard-manager|write_text`
+        // （复制按钮），**从不调用 read_text**，所以"write 后 read 回来"这种往返用例
+        // 测的是一个上游不用的命令 —— 只会得到误导性的红。
+        // 实测到的现象（2026-09-28）：read_text 返回 undefined（getPrimaryText() 无
+        // TEXT_PLAIN 记录）。webapp 不调用它，故不影响 M3；write 是否真的落盘待人工
+        // 点一次复制按钮确认（见 notes/M3-feed-import-hang.md 末节）。
+
+        render();
+        // 报告写进应用缓存目录，便于取回核对。
+        try {
+          var cacheRoot = await invoke('plugin:path|resolve_directory', { directory: 16, path: '' });
+          var report = JSON.stringify({ at: new Date().toISOString(), results: results }, null, 2);
+          await invoke('plugin:fs|write_text_file', { path: cacheRoot + '/doctor-report.json', data: report });
+          console.log('DOCTOR|REPORT|' + cacheRoot + '/doctor-report.json');
+        } catch (e) {
+          console.log('DOCTOR|REPORT-FAIL|' + (e && e.message ? e.message : String(e)));
+        }
+      }
+
+      window.__runDoctor = function () {
+        run().catch(function (e) {
+          check('doctor crashed', false, String(e && e.stack ? e.stack : e));
+          render();
+        });
+      };
+
+      if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        window.__runDoctor();
+      } else {
+        window.addEventListener('DOMContentLoaded', function () { window.__runDoctor(); });
+      }
+    })();
+  </script>
+</body>
+</html>

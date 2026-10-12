@@ -1,0 +1,58 @@
+Readesk — NOTICE
+================
+
+本工程（Readesk，鸿蒙版电子书阅读器）是基于开源项目 **Readest** 的二次开发版本
+（HarmonyOS 移植），依据 GNU Affero General Public License v3.0（AGPL-3.0）发布。
+许可证全文见本目录下的 LICENSE 文件。
+
+This project (Readesk, an ebook reader for HarmonyOS) is a modified version of the
+open-source project Readest, ported to HarmonyOS. It is distributed under the
+GNU Affero General Public License v3.0. The full license text is provided in the
+LICENSE file in this directory.
+
+1. 上游项目 / Upstream
+---------------------
+  Readest — https://github.com/readest/readest
+  本移植固定在上游 commit `ac42ae5`（对应上游 v0.12.8）。
+
+2. 本移植对上游源码的全部修改 / Complete list of modifications
+-----------------------------------------------------------
+  对所有上游源码的修改集中在一个补丁里，可完整复现：
+
+    patches/0001-harmony-port-source-changes.patch
+
+  把它应用到上游 `ac42ae5` 的 `apps/readest-app/` 之上即可得到本工程的 webapp 源码。
+  补丁内的注释逐条说明了改动原因；归纳起来分四类：
+
+  - **关停云能力**：登录 / 账号 / 云同步 / 分享到云的入口全部隐藏
+    （新增 `src/services/features.ts` 的 `CLOUD_ENABLED`，默认 false）；
+  - **关停并移除翻译**：`TRANSLATION_ENABLED`（默认 false），翻译引擎代码保留但入口移除；
+  - **关停应用内更新**：`UPDATER_ENABLED`（默认 false），同时不再拉取上游 changelog；
+  - **品牌与合规**：应用名 Readesk、关于页合规说明、图标替换、移除应用锁与
+    Integrations 面板、少量平台适配（窗口、文件对话框、选择器返回路径等）。
+
+  本工程另外包含 ArkTS 侧的鸿蒙壳与桥（`entry/src/main/ets/`），这部分是新写的，
+  不属于对上游的修改。
+
+3. 第三方组件 / Third-party components
+-------------------------------------
+  随应用分发的第三方库及其许可（各自保留其版权与许可声明）：
+
+    foliate-js        MIT
+    zip.js            BSD-3-Clause
+    fflate            MIT
+    PDF.js            Apache-2.0
+
+  以上组件的许可文本随包提供于 webapp 的 `vendor/` 目录下
+  （如 `resources/rawfile/webapp/vendor/pdfjs/`）。
+
+4. 构建产物与源码的对应关系 / Corresponding Source
+-------------------------------------------------
+  依据 AGPL-3.0，通过网络与本应用交互的用户有权获得**完整对应源代码**。
+  构建产物（`.app` / `.hap`）与源码版本的对应关系：
+
+    .app / .hap 的 versionName 0.1.0  ←→  本仓库 tag `v0.1.0`
+    上游 webapp 源码 = 上游 ac42ae5 + patches/0001-harmony-port-source-changes.patch
+
+  获取方式：<CONSOLE_PLACEHOLDER_SOURCE_URL>
+  （发布前请在此处、以及应用市场页面的隐私政策中，填写真实可访问的地址。）

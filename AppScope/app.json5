@@ -1,0 +1,16 @@
+{
+  "app": {
+    "bundleName": "com.kehahn.readest",
+    "vendor": "readest",
+    // 上架版本 0.1.0（2026-10-12 首次提交应用市场）。
+    // versionCode 沿用本仓库既有映射：major*1e6 + minor*1e4 + patch
+    //   （先例 0.12.8 -> 120008 = 0*1e6 + 12*1e4 + 8）
+    //   => 0.1.0 -> 0*1e6 + 1*1e4 + 0 = 10000
+    // ⚠️ 应用市场要求每次提交的 versionCode **严格递增**且不可重复使用；
+    //    0.1.1 -> 10001，0.2.0 -> 20000，1.0.0 -> 1000000。
+    "versionCode": 10000,
+    "versionName": "0.1.0",
+    "icon": "$media:layered_image",
+    "label": "$string:app_name"
+  }
+}
